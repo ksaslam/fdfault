@@ -45,6 +45,7 @@ block::block(const char* filename, const int ndim_in, const int mode_in, const s
         is_plastic = false;
     } else {
         is_plastic = true;
+        plastic_tensor = f.plastic_tensor;
     }
     
     string line;
@@ -114,6 +115,7 @@ block::block(const char* filename, const int ndim_in, const int mode_in, const s
     assert(mode_in == 2 || mode_in == 3);
 	for (int i=0; i<ndim_in; i++) {
 		assert(nx_in[i] > 0);
+		assert(nx_in[i] >= 4*fd.get_sbporder()-3); // block must have enough points to accommodate finite difference method
 		assert(xm_in[i] >= 0);
 	}
 	
@@ -440,11 +442,12 @@ void block::set_boundaries(const double dt, fields& f) {
 void block::calc_plastic(const double dt, fields& f) {
     // calculates plastic deformation
     
-    if (no_data) { return; }
+    if (no_data || !is_plastic) { return; }
     
     plastp s_out, s_in;
     int index;
     double k, g;
+    double mat_mu, mat_c, mat_beta, mat_eta;  //added by khurram for heterogeneous plastic material  
     
     for (int i=mlb[0]; i<prb[0]; i++) {
         for (int j=mlb[1]; j<prb[1]; j++) {
@@ -464,6 +467,14 @@ void block::calc_plastic(const double dt, fields& f) {
                         s_in.szz = f.f[8*nxd[0]+index];
                         s_in.lambda = f.f[9*nxd[0]+index];
                         s_in.gammap = f.f[10*nxd[0]+index];
+                        if (plastic_tensor) {
+                            s_in.epxx = f.f[11*nxd[0]+index];
+                            s_in.epxy = f.f[12*nxd[0]+index];
+                            s_in.epxz = f.f[13*nxd[0]+index];
+                            s_in.epyy = f.f[14*nxd[0]+index];
+                            s_in.epyz = f.f[15*nxd[0]+index];
+                            s_in.epzz = f.f[16*nxd[0]+index];
+                        }
                         break;
                     case 2:
                         switch (mode) {
@@ -476,6 +487,14 @@ void block::calc_plastic(const double dt, fields& f) {
                                 s_in.szz = f.f[5*nxd[0]+index];
                                 s_in.lambda = f.f[6*nxd[0]+index];
                                 s_in.gammap = f.f[7*nxd[0]+index];
+                                if (plastic_tensor) {
+                                    s_in.epxx = f.f[8*nxd[0]+index];
+                                    s_in.epxy = f.f[9*nxd[0]+index];
+                                    s_in.epxz = f.f[10*nxd[0]+index];
+                                    s_in.epyy = f.f[11*nxd[0]+index];
+                                    s_in.epyz = f.f[12*nxd[0]+index];
+                                    s_in.epzz = f.f[13*nxd[0]+index];
+                                }
                                 break;
                             case 3:
                                 s_in.sxx = f.s0[0];
@@ -486,21 +505,50 @@ void block::calc_plastic(const double dt, fields& f) {
                                 s_in.szz = f.s0[5];
                                 s_in.lambda = f.f[3*nxd[0]+index];
                                 s_in.gammap = f.f[4*nxd[0]+index];
+                                if (plastic_tensor) {
+                                    s_in.epxx = f.f[5*nxd[0]+index];
+                                    s_in.epxy = f.f[6*nxd[0]+index];
+                                    s_in.epxz = f.f[7*nxd[0]+index];
+                                    s_in.epyy = f.f[8*nxd[0]+index];
+                                    s_in.epyz = f.f[9*nxd[0]+index];
+                                    s_in.epzz = f.f[10*nxd[0]+index];
+                                }
                                 break;
                         }
                 }
-                
-                if (f.hetmat) {
+                // Block added by khurram to take care of the het plastic material properties
+                if (f.hetmat == true and f.het_plastic_mat == true) {
                     k = f.mat[nxd[0]+index]+2./3.*f.mat[2*nxd[0]+index];
                     g = f.mat[2*nxd[0]+index];
+                    mat_mu = f.mat[3*nxd[0]+index];
+                    mat_c  = f.mat[4*nxd[0]+index];
+                    mat_beta = f.mat[5*nxd[0]+index];
+                    mat_eta  = f.mat[6*nxd[0]+index];
+
+                } else if (f.hetmat == true and f.het_plastic_mat == false) {
+                    
+                    k = f.mat[nxd[0]+index]+2./3.*f.mat[2*nxd[0]+index];
+                    g = f.mat[2*nxd[0]+index];
+                    mat_mu = mat.get_mu();
+                    mat_c  = mat.get_c();
+                    mat_beta = mat.get_beta();
+                    mat_eta  = mat.get_eta();
+
                 } else {
+                    
                     k = mat.get_lambda()+2./3.*mat.get_g();
                     g = mat.get_g();
+                    mat_mu = mat.get_mu();
+                    mat_c = mat.get_c();
+                    mat_beta = mat.get_beta();
+                    mat_eta  = mat.get_eta();
+                    
                 }
                 
+
                 // solve plasticity equations
                 
-                s_out = plastic_flow(dt, s_in, k, g);
+                s_out = plastic_flow(dt, s_in, k, g, mat_mu, mat_c, mat_beta, mat_eta);
                 
                 // adjust stress values
                 
@@ -514,6 +562,14 @@ void block::calc_plastic(const double dt, fields& f) {
                         f.f[8*nxd[0]+index] = s_out.szz;
                         f.f[9*nxd[0]+index] = s_out.lambda;
                         f.f[10*nxd[0]+index] = s_out.gammap;
+                        if (plastic_tensor) {
+                            f.f[11*nxd[0]+index] = s_out.epxx;
+                            f.f[12*nxd[0]+index] = s_out.epxy;
+                            f.f[13*nxd[0]+index] = s_out.epxz;
+                            f.f[14*nxd[0]+index] = s_out.epyy;
+                            f.f[15*nxd[0]+index] = s_out.epyz;
+                            f.f[16*nxd[0]+index] = s_out.epzz;
+                        }
                         break;
                     case 2:
                         switch (mode) {
@@ -524,12 +580,28 @@ void block::calc_plastic(const double dt, fields& f) {
                                 f.f[5*nxd[0]+index] = s_out.szz;
                                 f.f[6*nxd[0]+index] = s_out.lambda;
                                 f.f[7*nxd[0]+index] = s_out.gammap;
+                                if (plastic_tensor) {
+                                    f.f[8*nxd[0]+index] = s_out.epxx;
+                                    f.f[9*nxd[0]+index] = s_out.epxy;
+                                    f.f[10*nxd[0]+index] = s_out.epxz;
+                                    f.f[11*nxd[0]+index] = s_out.epyy;
+                                    f.f[12*nxd[0]+index] = s_out.epyz;
+                                    f.f[13*nxd[0]+index] = s_out.epzz;
+                                }
                                 break;
                             case 3:
                                 f.f[1*nxd[0]+index] = s_out.sxz;
                                 f.f[2*nxd[0]+index] = s_out.syz;
                                 f.f[3*nxd[0]+index] = s_out.lambda;
                                 f.f[4*nxd[0]+index] = s_out.gammap;
+                                if (plastic_tensor) {
+                                    f.f[5*nxd[0]+index] = s_out.epxx;
+                                    f.f[6*nxd[0]+index] = s_out.epxy;
+                                    f.f[7*nxd[0]+index] = s_out.epxz;
+                                    f.f[8*nxd[0]+index] = s_out.epyy;
+                                    f.f[9*nxd[0]+index] = s_out.epyz;
+                                    f.f[10*nxd[0]+index] = s_out.epzz;
+                                }
                                 break;
                         }
                 }
@@ -538,7 +610,7 @@ void block::calc_plastic(const double dt, fields& f) {
     }
 }
 
-plastp block::plastic_flow(const double dt, const plastp s_in, const double k, const double g) const {
+plastp block::plastic_flow(const double dt, const plastp s_in, const double k, const double g, const double mat_mu, const double mat_c, const double mat_beta, const double mat_eta) const {
     // solves for stresses and plastic strain
     
     // calculate shear and normal stresses
@@ -547,9 +619,9 @@ plastp block::plastic_flow(const double dt, const plastp s_in, const double k, c
     double tau = calc_tau(s_in);
     
     // determine if stress exceeds yield stress
-    
-    double y = yield(tau, sigma);
-    
+     double y = yield(tau, sigma, mat_mu, mat_c);
+
+
     plastp s_out;
     
     double sd[6];
@@ -565,13 +637,21 @@ plastp block::plastic_flow(const double dt, const plastp s_in, const double k, c
         
         // yields, must solve for stresses, lambda, and gammap
         
-        // solve for lambda
-        
-        if (tau*mat.get_mu()*mat.get_beta()*k > (mat.get_mu()*sigma-mat.get_c())*g) {
-            s_out.lambda = (tau+mat.get_mu()*sigma-mat.get_c())/(mat.get_eta()+dt*(g+mat.get_mu()*mat.get_beta()*k));
+        // solve for lambda     ! Note this block added by khurram. The block-wise properties are not applicable anymore       
+        if (tau*mat_mu*mat_beta*k > (mat_mu*sigma-mat_c)*g) {
+            s_out.lambda = (tau+mat_mu*sigma-mat_c)/(mat_eta+dt*(g+mat_mu*mat_beta*k));
         } else { // special case
-            s_out.lambda = tau/(mat.get_eta()+dt*g);
-        }
+            s_out.lambda = tau/(mat_eta+dt*g);
+        }        
+        
+        // if (tau*mat.get_mu()*mat.get_beta()*k > (mat.get_mu()*sigma-mat.get_c())*g) {
+        //     s_out.lambda = (tau+mat.get_mu()*sigma-mat.get_c())/(mat.get_eta()+dt*(g+mat.get_mu()*mat.get_beta()*k));
+        // } else { // special case
+        //     s_out.lambda = tau/(mat.get_eta()+dt*g);
+        // }
+
+
+
         
         // update gammap
         
@@ -589,7 +669,8 @@ plastp block::plastic_flow(const double dt, const plastp s_in, const double k, c
         // correct tau and sigma
         
         tau -= dt*s_out.lambda*g;
-        sigma -= dt*s_out.lambda*mat.get_beta()*k;
+        sigma -= dt*s_out.lambda*mat_beta*k;   //added by khurram
+        //sigma -= dt*s_out.lambda*mat.get_beta()*k;
         
         // correct deviatoric stress
         
@@ -605,6 +686,16 @@ plastp block::plastic_flow(const double dt, const plastp s_in, const double k, c
         s_out.syy = sd[3]+sigma;
         s_out.syz = sd[4];
         s_out.szz = sd[5]+sigma;
+        
+        s_out.epxx = s_in.epxx+dt*s_out.lambda*(sd[0]/(2.*tau)+(mat_beta/3.));    //added by khurram
+        //s_out.epxx = s_in.epxx+dt*s_out.lambda*(sd[0]/(2.*tau)+(mat.get_beta()/3.));
+        s_out.epxy = s_in.epxy+dt*s_out.lambda*(sd[1]/(2.*tau));
+        s_out.epxz = s_in.epxz+dt*s_out.lambda*(sd[2]/(2.*tau));
+        s_out.epyy = s_in.epyy+dt*s_out.lambda*(sd[3]/(2.*tau)+(mat_beta/3.));   //added by khurram
+        //s_out.epyy = s_in.epyy+dt*s_out.lambda*(sd[3]/(2.*tau)+(mat.get_beta()/3.));
+        s_out.epyz = s_in.epyz+dt*s_out.lambda*(sd[4]/(2.*tau));
+        s_out.epzz = s_in.epzz+dt*s_out.lambda*(sd[5]/(2.*tau)+(mat_beta/3.));   //added by khurram
+        //s_out.epzz = s_in.epzz+dt*s_out.lambda*(sd[5]/(2.*tau)+(mat.get_beta()/3.));
     
     }
     
@@ -626,11 +717,11 @@ double block::calc_sigma(const plastp s) const {
 
 }
 
-double block::yield(const double tau, const double sigma) const {
+double block::yield(const double tau, const double sigma, const double mat_mu, const double mat_c ) const {
     // returns yield function given stresses
-    
-    double yf = mat.get_c()-mat.get_mu()*sigma;
-    
+
+    double yf = mat_c - mat_mu*sigma;
+
     if (yf < 0.) {
         yf = 0.;
     }

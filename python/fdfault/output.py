@@ -37,6 +37,17 @@ Acceptable field names for volume output:
 * ``'szz'`` - zz stress component
 * ``'gammap'`` - scalar plastic strain
 * ``'lambda'`` - scalar plastic strain rate
+* ``'epxx'`` - xx plastic strain component
+* ``'epxy'`` - xy plastic strain component
+* ``'epxz'`` - xz plastic strain component
+* ``'epyy'`` - yy plastic strain component
+* ``'epyz'`` - yz plastic strain component
+* ``'epzz'`` - zz plastic strain component
+
+Selecting a plastic field in an elastic simulation will result in an error. If you wish to save a
+component of the plastic strain tensor, you must turn on the ``plastic_tensor`` option
+using the ``set_plastic_tensor`` method of a problem (i.e. set to ``True``). Otherwise you will
+get an error.
 
 Acceptable field names for interface output (coordinates must form a 2D (1D for 2D problems)
 slice through the domain along a single interface between two blocks. Note that if your
@@ -57,21 +68,39 @@ parallel I/O is handled in the code.
 * ``'Sy'`` - y shear traction component (signed)
 * ``'Sz'`` - z shear traction component (signed)
 
-Note that for interfaces that do not align with a particular coordinate direction such as x or y,
-the interface components will not be exactly along the specified directions, and will instead
-conform to the following rules:
+The different interface components do not truly correspond to the corresponding coordinate
+directions. The code handles complex boundary conditions by rotating the fields into a
+coordinate system defined by three mutually orthogonal unit vectors. The normal direction
+is defined to always point into the "positive" block and is uniquely defined by the boundary
+geometry. The two tangential components are defined as follows for each different type of
+interface:
 
-* First, the code finds the largest of the three components of the normal vector.
+* Depending on the orientation of the interface in the computational space, a different
+  convention is used to set the first tangent vector. For ``'x'`` or ``'y'`` oriented interfaces,
+  the :math:`{z}` component of the first tangent vector is set to zero. This is done to ensure 
+  that for 2D problems, the second tangent vector points in the :math:`{z}`-direction. For
+  ``'z'`` oriented interfaces, the :math:`{y}` component of the first tangent vector is set to zero.
+  
+* With one component of the first tangent vector defined, the other two components can be
+  uniquely determined to make the tangent vector orthogonal up to a sign. The sign is chosen
+  such that the tangent vector points in the direction where the grid points are increasing.
+  
+* The second tangent vector is defined by taking the right-handed cross product of the normal
+  and first tangent vectors, except for ``'y'`` interfaces, where the left-handed cross product is
+  used. This is done to ensure that for 2D problems, the vertical component always points in the
+  :math:`{+z}`-direction.
 
-* If the largest component is the :math:`{x}` or :math:`{y}` component, the :math:`{z}` component of the first tangent vector is set to zero.
-  This is done to ensure that for 2D problems, the second tangent vector points in the :math:`{z}`-direction. If the :math:`{z}` component is
-  largest, the :math:`{y}` component of the first tangent vector is set to zero.
-
-* With one component of the first tangent vector defined, the other two components can be uniquely determined to make the tangent vector
-  orthogonal up to a sign. The sign is chosen such that the largest of the two remaining components keeps its original sign (usually positive). 
-  Again, this is done to ensure that the for 2D problems, the second tangent vector points in the :math:`{z}`-direction.
-
-* The second tangent vector is defined by taking the cross product of the normal and first tangent vectors.
+The consequence of this is that the letter used to designate the desired component is only valid
+for rectangular geometries. For non-rectangular geometries, the components will be rotated into
+the coordinate system described above. For interfaces in the "x" direction (i.e. connecting blocks
+whose indices only differ in the :math:`{x}`-direction), the :math:`{y}` component of output units
+will be along the first tangent vector, and the :math:`{z}` component will be along the second
+tangent vector. Similarly, for "y" interfaces the :math:`{x}` component is set by the first tangent
+vector and the :math:`{z}` component is determined by the second tangent vector, and for "z"
+interfaces the first tangent vector is in the :math:`{x}`-direction and the second tangent vector
+corresponds to the :math:`{y}`-direction. If you desire the components in a different coordinate
+system, you can convert them from the output data. Note that this also means that you can only
+specify certain components for interface output, depending on the direction of the interface.
 """
 
 from __future__ import division, print_function
@@ -93,39 +122,90 @@ class output(object):
     :ivar tp: Maximum time index to be written to file (inclusive)
     :type tp: int
     :ivar ts: Stride for time output (will skip over appropriate number of time steps so that
-                 every ``ts`` time steps are saved between ``tm`` and ``tp)
+                 every ``ts`` time steps are saved between ``tm`` and ``tp``)
     :type ts: int
     :ivar xm: Minimum x index to be written to file (inclusive)
     :type xm: int
     :ivar xp: Maximum x index to be written to file (inclusive)
     :type xp: int
     :ivar xs: Stride for x output (will skip over appropriate number of x grid points so that
-                 one per every ``xs`` points are saved between ``xm`` and ``xp)
+                 one per every ``xs`` points are saved between ``xm`` and ``xp``)
     :type xs: int
     :ivar ym: Minimum y index to be written to file (inclusive)
     :type ym: int
     :ivar yp: Maximum y index to be written to file (inclusive)
     :type yp: int
     :ivar ys: Stride for y output (will skip over appropriate number of y grid points so that
-                 one per every ``ys`` points are saved between ``ym`` and ``yp)
+                 one per every ``ys`` points are saved between ``ym`` and ``yp``)
     :type ys: int
     :ivar zm: Minimum z index to be written to file (inclusive)
     :type zm: int
     :ivar zp: Maximum z index to be written to file (inclusive)
     :type zp: int
     :ivar zs: Stride for z output (will skip over appropriate number of z grid points so that
-                 one per every ``zs`` points are saved between ``zm`` and ``zp)
+                 one per every ``zs`` points are saved between ``zm`` and ``zp``)
     :type zs: int
     """
     def __init__(self, name, field, tm = 0, tp = 0, ts = 1, xm = 0, xp = 0, xs = 1, ym = 0,
                  yp = 0, ys = 1, zm = 0, zp = 0, zs = 1):
-        "Initializes ouput unit"
+        """
+        Initialize a new ouput unit
+
+        Creates a new output unit. Required arguments are the name and field to be saved.
+        Specifying additional parameters gives the user control over what data is saved.
+        Time and three spatial dimensions can be set with a triplet of integers representing
+        minus, plius, and stride values. Minus sets the first index that is saved, plus sets the
+        last, and stride controls how frequently the data is saves (stride of 1 means every value
+        is saved, 2 means every other point is saved, etc.). Specifying values out of bounds
+        such as minus > plus or any number less than zero will result in an error. If values
+        that are outside the simulation range are given, the code will give a warning but not
+        an error.
+
+        All triplets have default values of minus = 0, plus = 0, and stride = 1, and are optional.
+
+        :param name: Name used in files for saving data
+        :type name: str
+        :param field: Field to be saved to file (see list of acceptable values above)
+        :type field: str
+        :param tm: Minimum time index to be written to file (inclusive)
+        :type tm: int
+        :param tp: Maximum time index to be written to file (inclusive)
+        :type tp: int
+        :param ts: Stride for time output (will skip over appropriate number of time steps so that
+                     every ``ts`` time steps are saved between ``tm`` and ``tp``)
+        :type ts: int
+        :param xm: Minimum x index to be written to file (inclusive)
+        :type xm: int
+        :param xp: Maximum x index to be written to file (inclusive)
+        :type xp: int
+        :param xs: Stride for x output (will skip over appropriate number of x grid points so that
+                     one per every ``xs`` points are saved between ``xm`` and ``xp``)
+        :type xs: int
+        :param ym: Minimum y index to be written to file (inclusive)
+        :type ym: int
+        :param yp: Maximum y index to be written to file (inclusive)
+        :type yp: int
+        :param ys: Stride for y output (will skip over appropriate number of y grid points so that
+                     one per every ``ys`` points are saved between ``ym`` and ``yp``)
+        :type ys: int
+        :param zm: Minimum z index to be written to file (inclusive)
+        :type zm: int
+        :param zp: Maximum z index to be written to file (inclusive)
+        :type zp: int
+        :param zs: Stride for z output (will skip over appropriate number of z grid points so that
+                     one per every ``zs`` points are saved between ``zm`` and ``zp``)
+        :type zs: int
+        :returns: New instance of output unit
+        :rtype: ~fdfault.output
+        """
         assert type(name) is str, "output name must be a string"
         assert (field == "vx" or field == "vy" or field == "vz" or field == "sxx" or field == "sxy"
                 or field == "sxz" or field == "syy" or field == "syz" or field == "szz" or field == "Ux"
                 or field == "Uy" or field == "Uz" or field == "Vx" or field == "Vy" or field == "Vz"
                 or field == "U" or field == "V" or field == "Sx" or field == "Sy" or field == "Sz"
-                or field == "S" or field == "Sn" or field == "gammap" or field == 'lambda' or field == "state"), "Incorrect field name"
+                or field == "S" or field == "Sn" or field == "gammap" or field == 'lambda' or field == "state"
+                or field == "epxx" or field == "epxy" or field == "epxz" or field == "epyy" or field == "epyz"
+                or field == "epzz"), "Incorrect field name"
         assert (tm >= 0 and tp >= 0 and tp >= tm and ts > 0), "bad time limits"
         assert (xm >= 0 and xp >= 0 and xp >= xm and xs > 0), "bad x limits"
         assert (ym >= 0 and yp >= 0 and yp >= ym and ys > 0), "bad y limits"
@@ -137,18 +217,18 @@ class output(object):
         
         self.name = name
         self.field = field
-        self.tm = tm
-        self.tp = tp
-        self.ts = ts
-        self.xm = xm
-        self.ym = ym
-        self.zm = zm
-        self.xp = xp
-        self.yp = yp
-        self.zp = zp
-        self.xs = xs
-        self.ys = ys
-        self.zs = zs
+        self.tm = int(tm)
+        self.tp = int(tp)
+        self.ts = int(ts)
+        self.xm = int(xm)
+        self.ym = int(ym)
+        self.zm = int(zm)
+        self.xp = int(xp)
+        self.yp = int(yp)
+        self.zp = int(zp)
+        self.xs = int(xs)
+        self.ys = int(ys)
+        self.zs = int(zs)
 
     def get_name(self):
         """
@@ -191,7 +271,9 @@ class output(object):
                 or field == "sxz" or field == "syy" or field == "syz" or field == "szz" or field == "Ux"
                 or field == "Uy" or field == "Vx" or field == "Vy" or field == "U" or field == "V"
                 or field == "Sx" or field == "Sy" or field == "Sz" or field == "S" or field == "Sn"
-                or field == "lambda" or field == "gammap" or field == "state"), "Incorrect field name"
+                or field == "lambda" or field == "gammap" or field == "state" or field == "epxx"
+                or field == "epxy" or field == "epxz" or field == "epyy" or field == "epyz"
+                or field == "epzz"), "Incorrect field name"
         self.field = field
 
     def get_tm(self):

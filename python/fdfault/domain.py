@@ -68,9 +68,21 @@ class domain(object):
     :ivar cdiss: Artificial dissipation coefficient (float, default 0.). A nonzero value will
                       turn on artificial dissipation in the simulation. It is up to the user to select
                       this value correctly.
+    :vartype cdiss: float
     """
     def __init__(self):
-        "Initialize problem, default configuration is one block with one grid point"
+        """
+        Create a new instance of a ``domain`` class
+        
+        Initializes a new domain with a 2D mode 2 rupture containing a single elastic block.
+        The block has the default material properties, one grid point in each direction, unit
+        length in each direction, and the block is located at (0., 0., 0.) in space. The domain
+        has a default finite difference order of 2 and no artificial dissipation. All defaults
+        can be modified using the provided interfaces in the class.
+
+        :returns: New ``domain`` instance with default properties
+        :rtype: domain
+        """
         self.ndim = 2
         self.mode = 2
         self.mattype = 'elastic'
@@ -301,9 +313,9 @@ class domain(object):
         if self.ndim == 2:
             if (nblocks[2] > 1):
                 print("Warning: number of z blocks set to 1 as ndim = 2")
-            self.nblocks = (nblocks[0], nblocks[1], 1)
+            self.nblocks = (int(nblocks[0]), int(nblocks[1]), 1)
         else:
-            self.nblocks = nblocks
+            self.nblocks = (int(nblocks[0]), int(nblocks[1]), int(nblocks[2]))
 
         for i in range(3):
             oldlen = len(self.nx_block[i])
@@ -440,11 +452,12 @@ class domain(object):
             for j in nx_block[i]:
                 assert j > 0, "Number of grid points per block must be greater than zero"
 
-        self.nx_block = (nx_block[0], nx_block[1], nx_block[2])
+        self.nx_block = (list(int(x) for x in nx_block[0]), list(int(y) for y in nx_block[1]),
+                         list(int(z) for z in nx_block[2]))
         if self.ndim == 2:
             if nx_block[2][0] > 1:
                 print("Warning: number of z grid points set to 1 as ndim = 2")
-            self.nx_block = (nx_block[0], nx_block[1], [1])
+            self.nx_block = (self.nx_block[0], self.nx_block[1], [1])
         
         for i in range(3):
             for j in range(self.nblocks[i]):
@@ -684,9 +697,11 @@ class domain(object):
         The block to be modified is determined by ``coords``, which is a tuple or list of 3 integers
         that match the coordinates of a block.
         
-        There are two ways to use ``set_bounds``.
+        There are two ways to use ``set_bounds``:
+        
         1. Set ``loc`` to be ``None`` (default) and provide a list of strings specifying boundary
            type for ``bounds``. The length of ``bounds`` is 4 for a 2D simulation and 6 for 3D.
+           
         2. Set ``loc`` to be an integer denoting location and give ``bounds`` as a single string. 
            The possible locations correspond to the following: 0 = left, 1 = right, 2 = front, 3 = back,
            4 = bottom, 5 = top. 4 and 5 are only applicable to 3D simulations (0 <= loc < 2*ndim).
@@ -796,46 +811,32 @@ class domain(object):
         :returns: None
         """
 
-        # first set all edge blocks to line up with lower left corner
+        # first set all (i,0,0) blocks to line up with lower left corner
 
         xm000 = self.blocks[0][0][0].get_xm()
         cum = xm000[0]
         for i in range(1,self.nblocks[0]):
             cum += self.blocks[i-1][0][0].get_lx()[0]
             self.blocks[i][0][0].set_xm((cum, xm000[1], xm000[2]))
-        cum = xm000[1]
-        for j in range(1,self.nblocks[1]):
-            cum += self.blocks[0][j-1][0].get_lx()[1]
-            self.blocks[0][j][0].set_xm((xm000[0], cum, xm000[2]))
-        cum = xm000[2]
-        for k in range(1, self.nblocks[2]):
-            cum += self.blocks[0][0][k-1].get_lx()[2]
-            self.blocks[0][0][k].set_xm((xm000[0], xm000[1], cum))
+
+        # now can set all (i,j,0) blocks to line up with (i,0,0) blocks
         
-        # set remaining blocks to match up with edge blocks
+        for i in range(self.nblocks[0]):
+            xm000 = self.blocks[i][0][0].get_xm()
+            cum = xm000[1]
+            for j in range(1,self.nblocks[1]):
+                cum += self.blocks[i][j-1][0].get_lx()[1]
+                self.blocks[i][j][0].set_xm((xm000[0], cum, xm000[2]))
+
+        # finally set all (i,j,k) blocks to line up with (i,j,0) blocks
 
         for i in range(self.nblocks[0]):
             for j in range(self.nblocks[1]):
-                for k in range(self.nblocks[2]):
-                    if (i == 0):
-                        x0 = self.blocks[i][j][k].get_xm()[0]
-                    else:
-                        x = self.blocks[i-1][j][k].get_xm()[0]
-                        l = self.blocks[i-1][j][k].get_lx()[0]
-                        x0 = x+l
-                    if (j == 0):
-                        x1 = self.blocks[i][j][k].get_xm()[1]
-                    else:
-                        x = self.blocks[i][j-1][k].get_xm()[1]
-                        l = self.blocks[i][j-1][k].get_lx()[1]
-                        x1 = x+l
-                    if (k == 0):
-                        x2 = self.blocks[i][j][k].get_xm()[2]
-                    else:
-                        x = self.blocks[i][j][k-1].get_xm()[2]
-                        l = self.blocks[i][j][k-1].get_lx()[2]
-                        x2 = x+l                  
-                    self.blocks[i][j][k].set_xm((x0,x1,x2))
+                xm000 = self.blocks[i][j][0].get_xm()
+                cum = xm000[2]
+                for k in range(1, self.nblocks[2]):
+                    cum += self.blocks[i][j][k-1].get_lx()[2]
+                    self.blocks[i][j][k].set_xm((xm000[0], xm000[1], cum))
 
     def get_x(self, coord):
         """
@@ -1115,13 +1116,59 @@ class domain(object):
 
         :param mat: New material properties array (numpy array with shape ``(3, nx, ny, nz)``)
         :type mat: ndarray
-        :returns None
+        :returns: None
         """
         if self.ndim == 3:
             assert (mat.shape[1:] == self.nx), "heterogeneous material properties shape must match grid sizes"
         else:
             assert (mat.shape[1:] == self.nx[0:2]), "heterogeneous material properties shape must match grid sizes"
         self.f.set_het_material(mat)
+
+
+    def get_het_plastic_mat(self):
+        """
+        Returns heterogeneous plastic material properties
+
+        :returns: heterogeneous plastic material properties
+        :rtype: int
+        """
+        return self.f.get_het_plastic_mat()
+
+    def set_het_plastic_mat(self, het_plastic):
+        """
+        Sets heterogeneous plastic material properties
+        The value must be Boolian 
+
+        :param het_plastic: if plastic properties are heterogeneous
+        :type het_plastic: Bool 
+        :returns: None
+        """
+        
+        self.f.set_het_plastic_mat(het_plastic)
+   
+
+
+    def get_plastic_tensor(self):
+        """
+        Returns boolean indicating if simulation will compute full plastic strain tensor
+
+        :returns: Whether or not simulation will compute the full plastic strain tensur
+        :rtype: bool
+        """
+        return self.f.get_plastic_tensor()
+
+    def set_plastic_tensor(self, plastic_tensor):
+        """
+        Sets value of plastic strain tensor indicator
+
+        Method sets whether or not plastic strain will be computed as a tensor (must be boolean).
+        ``True`` means full tensor will be calculated, ``False`` means not (not saves substantial memory)
+
+        :param plastic_tensor: New value of plastic strain tensor variable (must be boolean)
+        :type plastic_tensor: bool
+        :returns: None
+        """
+        self.f.set_plastic_tensor(plastic_tensor)
 
     def get_nifaces(self):
         """
@@ -1207,7 +1254,7 @@ class domain(object):
         error. ``newload`` will be appended to the load list
 
         :param newload: Load to be added
-        :type newload: load
+        :type newload: ~fdfault.load
         :param index: Interface to which the load should be added. Can be a single integer,
                               iterable of integers, or ``None`` to add to all interfaces (default is ``None``)
         :type index: int or tuple or list or None
@@ -1238,7 +1285,7 @@ class domain(object):
         ``index`` indicates the position in the load list that should be deleted.
         Default for ``index`` is ``-1`` (most recently added).
 
-        :param niface: Interface from which the load should be removed. ``niface``must refer to
+        :param niface: Interface from which the load should be removed. ``niface`` must refer to
                                a frictional interface
         :type niface: int
         :param index: Index within the load perturbation that should be removed (default is last)
@@ -1646,47 +1693,38 @@ class domain(object):
                 assert j > 0, "Number of grid points in each block must be positive"
             assert sum(self.nx_block[i]) == self.nx[i], "Number of grid points in blocks must equal nx"
 
+        for i in range(self.ndim):
+            for j in self.nx_block[i]:
+                assert j >= 4*self.sbporder-3, "Number of block grid points must be compatible with difference method"
+
         for i in range(self.nblocks[0]):
             for j in range(self.nblocks[1]):
                 for k in range(self.nblocks[2]):
                     self.blocks[i][j][k].check()
                     if (i != 0):
-                        s1 = self.blocks[i-1][j][k].get_surf(1)
-                        s2 = self.blocks[i][j][k].get_surf(0)
-                        if (s1 is None or s2 is None):
-                            assert(self.blocks[i-1][j][k].get_lx()[1] == self.blocks[i][j][k].get_lx()[1]), "block edges do not match"
-                            assert(self.blocks[i-1][j][k].get_lx()[2] == self.blocks[i][j][k].get_lx()[2]), "block edges do not match"
-                        else:
-                            assert s1 == s2, "block edges do not match"
+                        s1 = self.blocks[i-1][j][k].make_tempsurfs()[1]
+                        s2 = self.blocks[i][j][k].make_tempsurfs()[0]
+                        assert s1 == s2, "block edges do not match"
                     if (j != 0):
-                        s1 = self.blocks[i][j-1][k].get_surf(3)
-                        s2 = self.blocks[i][j][k].get_surf(2)
-                        if (s1 is None or s2 is None):
-                            assert(self.blocks[i][j-1][k].get_lx()[0] == self.blocks[i][j][k].get_lx()[0]), "block edges do not match"
-                            assert(self.blocks[i][j-1][k].get_lx()[2] == self.blocks[i][j][k].get_lx()[2]), "block edges do not match"
-                        else:
-                            assert s1 == s2, "block edges do not match"
+                        s1 = self.blocks[i][j-1][k].make_tempsurfs()[3]
+                        s2 = self.blocks[i][j][k].make_tempsurfs()[2]
+                        assert s1 == s2, "block edges do not match"
                     if (k != 0):
-                        s1 = self.blocks[i][j][k-1].get_surf(5)
-                        s2 = self.blocks[i][j][k].get_surf(4)
-                        if (s1 is None or s2 is None):
-                            assert(self.blocks[i][j][k-1].get_lx()[0] == self.blocks[i][j][k].get_lx()[0]), "block edges do not match"
-                            assert(self.blocks[i][j][k-1].get_lx()[1] == self.blocks[i][j][k].get_lx()[1]), "block edges do not match"
-                        else:
-                            assert s1 == s2, "block edges do not match"
+                        s1 = self.blocks[i][j][k-1].make_tempsurfs()[5]
+                        s2 = self.blocks[i][j][k].make_tempsurfs()[4]
+                        assert s1 == s2, "block edges do not match"
 
         for iface in self.interfaces:
-            coordsm = iface.get_bm()
-            if iface.get_direction() == 'x':
-                loc = 1
-            elif iface.get_direction() == 'y':
-                loc = 3
+            (i, j, k) = iface.get_bm()
+            (nx, ny, nz) = self.blocks[i][j][k].get_nx()
+            direction = iface.get_direction()
+            if direction == 'x':
+                iface.check((ny, nz))
+            elif direction == 'y':
+                iface.check((nx, nz))
             else:
-                loc = 5
-            s1 = self.blocks[coordsm[0]][coordsm[1]][coordsm[2]].get_surf(loc)
-            coordsp = iface.get_bp()
-            loc -= 1
-            s2 = self.blocks[coordsp[0]][coordsp[1]][coordsp[2]].get_surf(loc)
+                iface.check((nx, ny))
+            
     
     def __str__(self):
         "returns a string representation of a domain"

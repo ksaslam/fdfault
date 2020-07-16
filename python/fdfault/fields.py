@@ -34,17 +34,40 @@ class fields(object):
                   that for mode 3 problems, the in-plane normal stresses ``sxx`` and ``syy`` will
                   be used to determine the normal stress on any faults in the simulation, even
                   though the normal stresses do not change during the simulation.
+    :vartype s0: list
+    :ivar plastic_tensor: If true, calculate full plastic strain tensor (default is ``False``)
+    :vartype plastic_tensor: bool
+    :ivar s: Numpy array holding heterogeneous stress field (or ``None`` if no heterogeneous stress)
+    :vartype s: ndarray or None
+    :ivar mat: Numpy array holding heterogeneous material properties (or ``None`` if none)
+    :vartype mat: ndarray or None
     """
     def __init__(self, ndim, mode):
-        "Initializes fields for a given number of dimensions and rupture mode"
+        """
+        Initializes an instance of the ``fields`` class
+
+        Creates a new instance of the ``fields`` class. Attributes required to create a new instance
+        is the number of dimensions and rupture mode. By default, the new ``fields`` instance is
+        an elastic simulation with a stress tensor initialized to zero. The simulation also does not
+        have a heterogeneous stress or heterogeneous material properties.
+
+        :param ndim: Number of dimensions in the simulation (must be 2 or 3)
+        :type ndim: int
+        :param mode: Rupture mode (2 or 3, only relevant for 2D problems)
+        :type mode: int
+        :returns: New instance of the fields class
+        :rtype: fields
+        """
         assert(ndim == 2 or ndim == 3), "ndim must be 2 or 3"
         assert(mode == 2 or mode == 3), "mode must be 2 or 3"
         self.ndim = ndim
         self.mode = mode
         self.material = "elastic"
         self.s0 = [0., 0., 0., 0., 0., 0.]
+        self.plastic_tensor = False
         self.s = None
         self.mat = None
+        self.het_plastic_mat = False
         
     def get_material(self):
         """
@@ -167,9 +190,11 @@ class fields(object):
         """
         Returns heterogeneous material properties for simulation
         
-        Returns a numpy array with shape ``(3, nx, ny, nz)``. First index indicates parameter value
-        (0 = density, 1 = Lame parameter, 2 = Shear modulus). The other three indicate grid
-        coordinates. If no heterogeneous material parameters are specified, returns ``None``
+        Returns a numpy array with shape ``(3, nx, ny, nz)`` for elastic material properties, while 
+        ``(7, nx, ny, nz)`` for plastic material properties. First index indicates parameter value
+        (0 = density, 1 = Lame parameter, 2 = Shear modulus). The other three indicate grid coordinates. 
+        Incase of plastic properties, additional index indicates (3 = DP_mu , 4 = DP_cohesion, 5 = DP_beta, 6 = DP_eta)
+        If no heterogeneous material parameters are specified, returns ``None``
 
         :returns: ndarray
         """
@@ -180,22 +205,73 @@ class fields(object):
         Sets heterogeneous material properties for simulation
         
         New heterogeneous material properties must be a numpy array with shape
-        ``(3, nx, ny, nz)``. First index indicates parameter value
+        ``(3, nx, ny, nz)`` for elastic material properties, while 
+        ``(7, nx, ny, nz)`` for plastic material properties. First index indicates parameter value
         (0 = density, 1 = Lame parameter, 2 = Shear modulus). The other three indicate grid
-        coordinates
-
+        coordinates.
+        Incase of plastic properties, additional index indicates (3 = DP_mu , 4 = DP_cohesion, 5 = DP_beta, 6 = DP_eta)
         An array with the wrong shape will result in an error.
 
         :param mat: New material properties array (numpy array with shape ``(3, nx, ny, nz)``)
         :type mat: ndarray
         :returns: None
         """
-        if self.ndim == 2 and self.mode == 3:
-            assert(mat.shape[0] == 2), "for mode 3 problems, heterogeneous material properties must have 2 components"
-        else:
-            assert(mat.shape[0] == 3), "for 3D or mode 2 problems, heterogeneous material properties must have 3 components"
+        if self.material== "elastic":
+            if self.ndim == 2 and self.mode == 3:
+                assert(mat.shape[0] == 2), "for mode 3 problems, Elastic heterogeneous material properties must have 2 components"
+            else:
+                assert(mat.shape[0] == 3), "for 3D or mode 2 problems, Elastic heterogeneous material properties must have 3 components"
+
+        if self.material== "plastic":   # added by khurram to account for het plastic properties
+            assert(mat.shape[0] == 7), "for Plastic problems, plastic heterogeneous material properties must have 7 components"
+
+
         self.mat = np.array(mat)
 
+
+    def get_het_plastic_mat(self):
+        """
+        Returns heterogeneous plastic material properties
+
+        :returns: heterogeneous plastic material properties
+        :rtype: Bool
+        """
+        return self.het_plastic
+
+    def set_het_plastic_mat(self, het_plastic):
+        """
+        Sets heterogeneous plastic material properties
+        The value must be True or False (Boolian) 
+
+        :param het_plastic: if plastic properties are heterogeneous
+        :type het_plastic: Boolian    
+        :returns: None
+        """
+
+        self.het_plastic_mat = het_plastic 
+
+    def get_plastic_tensor(self):
+        """
+        Returns boolean indicating if simulation will compute full plastic strain tensor
+
+        :returns: Whether or not simulation will compute the full plastic strain tensur
+        :rtype: bool
+        """
+        return self.plastic_tensor
+
+    def set_plastic_tensor(self, plastic_tensor):
+        """
+        Sets value of plastic strain tensor indicator
+
+        Method sets whether or not plastic strain will be computed as a tensor (must be boolean).
+        ``True`` means full tensor will be calculated, ``False`` means not (not saves substantial memory)
+
+        :param plastic_tensor: New value of plastic strain tensor variable (must be boolean)
+        :type plastic_tensor: bool
+        :returns: None
+        """
+        self.plastic_tensor = bool(plastic_tensor)
+        
     def write_input(self,f, probname, directory, endian = '='):
         """
         Writes field information to input file
@@ -239,15 +315,24 @@ class fields(object):
         else:
             f.write(join(inputfiledir, probname)+".load\n")
             loadfile = open(join(directory, probname+".load"),"wb")
-            loadfile.write(self.s.astype(endian+'f8').tobytes())
+            for i in range(self.s.shape[0]):
+                loadfile.write(self.s[i].astype(endian+'f8').tobytes())
             loadfile.close()
         if self.mat is None:
             f.write("none\n")
         else:
             f.write(join(inputfiledir, probname)+".mat\n")
             matfile = open(join(directory, probname)+".mat","wb")
-            matfile.write(self.mat.astype(endian+'f8').tobytes())
+            if self.material == 'plastic' and self.het_plastic_mat == True:
+                print ('heterogeneous plastic properties')
+                nmat_new=7   #added by khurram for plastic het properties
+            else:
+                nmat_new=3
+            for i in range(nmat_new):
+                matfile.write(self.mat[i].astype(endian+'f8').tobytes())
             matfile.close()
+        f.write(str(int(self.plastic_tensor))+"\n")
+        f.write(str(int(self.het_plastic_mat))+"\n")
         f.write("\n")
 
     def __str__(self):

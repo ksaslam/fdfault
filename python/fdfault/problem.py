@@ -46,13 +46,15 @@ class problem(object):
     :vartype ninfo: int
     :ivar rkorder: Order of accuracy of time integration (default is 1)
     :vartype rkorder: int
-    :ivar domain: Initializing a problem also creates a new domain, which can be modified
+    :ivar d: Initializing a problem also creates a new domain, which can be modified
                          using the methods below.
-    :type fdfault.domain:
-    :ivar output: Initializing a problem creates an empty output list. To create output items, add
+    :vartype d: ~fdfault.domain
+    :ivar outputlist: Initializing a problem creates an empty output list. To create output items, add
                         them to the list using the appropriate method.
-    :ivar front: A new problem contains a front with output turned off. To turn on front output, use
+    :vartype outputlist: list
+    :ivar frt: A new problem contains a front with output turned off. To turn on front output, use
                      the appropriate method.
+    :vartype frt: ~fdfault.front
 
     The four variables related to the time step provide several ways to set the time step. You
     can set the time step using any pair of the variables *except* the time step and the Courant
@@ -69,7 +71,34 @@ class problem(object):
     """
     def __init__(self, name):
         """
-        Creates problem class with a given name, all other attributes set to zero
+        Creates a new instance of the ``problem`` class
+
+        Initializes a new instance of the ``problem`` class. Requires a problem name (string),
+        other parameters are set to the following defaults:
+
+            * ``datadir = 'data/'`` (path is relative to the main code directory)
+            
+            * ``nt``, ``dt``, ``ttot``, and ``cfl`` are set to zero. You must specify two of these to set
+              the time step, *except* the time step and the Courant ratio
+              
+            * ``ninfo = 10``
+            
+            * ``rkorder = 1``
+            
+            * An empty output list is initialized
+
+            * front output is ``False``
+
+            * A ``domain`` is created with a single block with 1 grid point in each direction,
+              default material properties, and a 2nd order finite difference method. All boundary
+              conditions are set to ``'none'``
+
+        All properties can be modified using the provided interfaces through the problem class.
+
+        :param name: Name for new problem
+        :type name: str
+        :returns: New problem instance
+        :rtype: problem
         """
         assert type(name) is str, "Problem name must be a string"
 
@@ -607,7 +636,7 @@ class problem(object):
         :returns: Material class with properties for this block
         :rtype: material
         """
-        self.d.get_material(coords)
+        return self.d.get_material(coords)
         
     def set_material(self, newmaterial, coords = None):
         """
@@ -631,6 +660,48 @@ class problem(object):
         :returns: None
         """
         self.d.set_material(newmaterial,coords)
+
+    def get_plastic_material_only(self, coords):
+        """
+        Returns plastic material properties for a given block
+
+        Returns the plastic material class associated with block with coordinates ``coords``. ``coords``
+        must be a tuple or list of valid block indices
+
+        :param coords: Coordinates of the target block (tuple or list of 3 nonnegative integers)
+        :type coords: tuple or list
+        :returns: Plastic Material properties for this block
+        :rtype: float
+        """
+        material = self.d.get_material(coords)
+        return (material.get_mu(), material.get_c(), material.get_beta(), material.get_eta() )
+
+    def set_plastic_material_only(self, mu_pls, c_pls, beta_pls, eta_pls, coords):
+        """
+        Sets block plastic material properties for the block with indices given by ``coords``
+
+        `mu_pls`` is mu of DP plasticity and its type is float.
+        `c_pls`` is c of DP plasticity and its type is float.
+        `beta_pls`` is beta of DP plasticity and its type is float.
+        `eta_pls`` is eta of DP plasticity and its type is float. 
+        coords be a tuple or list of three integers that match the coordinates of a block.
+        
+        :param mu_pls, c_pls, beta_pls, eta_pls: DP plasticity material properties
+        :type mu_pls, c_pls, beta_pls, eta_pls: float
+        :param coords: Coordinates of block to be changed (optional, omitting changes all blocks).
+                                 ``coords`` must be a tuple or list of three integers that match the coordinates
+                                 of a block.
+        :type coords: tuple or list
+        :returns: None
+        """
+        material = self.d.get_material(coords)
+        material.set_mu(mu_pls)
+        material.set_c (c_pls)
+        material.set_beta(beta_pls)
+        material.set_eta (eta_pls)
+        self.d.set_material(material,coords)    
+
+
 
     def get_bounds(self, coords, loc = None):
         """
@@ -664,9 +735,11 @@ class problem(object):
         The block to be modified is determined by ``coords``, which is a tuple or list of 3 integers
         that match the coordinates of a block.
         
-        There are two ways to use ``set_bounds``.
+        There are two ways to use ``set_bounds``:
+        
         1. Set ``loc`` to be ``None`` (default) and provide a list of strings specifying boundary
            type for ``bounds``. The length of ``bounds`` is 4 for a 2D simulation and 6 for 3D.
+           
         2. Set ``loc`` to be an integer denoting location and give ``bounds`` as a single string. 
            The possible locations correspond to the following: 0 = left, 1 = right, 2 = front, 3 = back,
            4 = bottom, 5 = top. 4 and 5 are only applicable to 3D simulations (0 <= loc < 2*ndim).
@@ -910,9 +983,53 @@ class problem(object):
 
         :param mat: New material properties array (numpy array with shape ``(3, nx, ny, nz)``)
         :type mat: ndarray
-        :returns None
+        :returns: None
         """
         self.d.set_het_material(mat)
+
+
+    def get_het_plastic_mat(self):
+        """
+        Returns heterogeneous plastic material properties
+
+        :returns: heterogeneous plastic material properties
+        :rtype: Boolian
+        """
+        return  self.d.get_het_plastic_mat()  
+
+    def set_het_plastic_mat(self, het_plastic):
+        """
+        Sets heterogeneous plastic material properties
+        The value must be 0 or 1 
+
+        :param het_plastic: if plastic properties are heterogeneous
+        :type het_plastic: int  (0 or 1)  
+        :returns: None
+        """
+        assert type(het_plastic) is bool, "index must be an Boolian"
+        self.d.set_het_plastic_mat(het_plastic)   
+
+    def get_plastic_tensor(self):
+        """
+        Returns boolean indicating if simulation will compute full plastic strain tensor
+
+        :returns: Whether or not simulation will compute the full plastic strain tensur
+        :rtype: bool
+        """
+        return self.d.get_plastic_tensor()
+
+    def set_plastic_tensor(self, plastic_tensor):
+        """
+        Sets value of plastic strain tensor indicator
+
+        Method sets whether or not plastic strain will be computed as a tensor (must be boolean).
+        ``True`` means full tensor will be calculated, ``False`` means not (not saves substantial memory)
+
+        :param plastic_tensor: New value of plastic strain tensor variable (must be boolean)
+        :type plastic_tensor: bool
+        :returns: None
+        """
+        self.d.set_plastic_tensor(plastic_tensor)
 
     def get_nifaces(self):
         """
@@ -972,11 +1089,11 @@ class problem(object):
         out of bounds or indicate an interface that is not frictional will raise an error.
         Default value is ``None`` (all interfaces).
 
-        ``newload`` must be a load perturbation (i.e. have type ``load``), or the code will raise an
+        ``newload`` must be a load perturbation (i.e. have type ~fdfault.load), or the code will raise an
         error. ``newload`` will be appended to the load list
 
         :param newload: Load to be added
-        :type newload: load
+        :type newload: ~fdfault.load
         :param index: Interface to which the load should be added. Can be a single integer,
                               iterable of integers, or ``None`` to add to all interfaces (default is ``None``)
         :type index: int or tuple or list or None
@@ -994,7 +1111,7 @@ class problem(object):
         ``index`` indicates the position in the load list that should be deleted.
         Default for ``index`` is ``-1`` (most recently added).
 
-        :param niface: Interface from which the load should be removed. ``niface``must refer to
+        :param niface: Interface from which the load should be removed. ``niface`` must refer to
                                a frictional interface
         :type niface: int
         :param index: Index within the load perturbation that should be removed (default is last)
@@ -1289,7 +1406,7 @@ class problem(object):
         for output lists)
 
         :param item: New output item
-        :type item: output
+        :type item: ~fdfault.output
         :returns: None
         """
         assert type(item) is output, "Item must be of type output"
@@ -1303,7 +1420,7 @@ class problem(object):
                                is given the entire list of output units is returned
         :type index: int
         :returns: output item or list of output items
-        :rtype: output or list
+        :rtype: fdfault.output or list
         """
         if index is None:
             return self.outputlist
